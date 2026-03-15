@@ -1,0 +1,240 @@
+import ccxt
+import pandas as pd
+import ta
+
+exchange = ccxt.binance()
+symbol = "BTC/USDT"
+
+
+# =========================
+# ВВОД ПЕРИОДА
+# =========================
+
+start_date = input("Начало периода (YYYY-MM-DD): ")
+end_date = input("Конец периода (YYYY-MM-DD): ")
+
+start_ts = exchange.parse8601(start_date + "T00:00:00Z")
+end_ts = exchange.parse8601(end_date + "T00:00:00Z")
+
+
+# =========================
+# ЗАГРУЗКА ДАННЫХ
+# =========================
+
+def get_data(tf):
+
+    all_data = []
+    since = start_ts
+
+    while since < end_ts:
+
+        data = exchange.fetch_ohlcv(
+            symbol,
+            timeframe=tf,
+            since=since,
+            limit=1000
+        )
+
+        if not data:
+            break
+
+        since = data[-1][0] + 1
+        all_data += data
+
+    df = pd.DataFrame(
+        all_data,
+        columns=["time","open","high","low","close","volume"]
+    )
+
+    df["time"] = pd.to_datetime(df["time"], unit="ms")
+
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], 14).rsi()
+
+    return df
+
+
+# =========================
+# ZIGZAG SWING
+# =========================
+
+def find_swings(df, threshold=0.005):
+
+    highs = []
+    lows = []
+
+    last_pivot = 0
+    last_price = df.close.iloc[0]
+
+    trend = None
+
+    for i in range(1, len(df)):
+
+        price = df.close.iloc[i]
+
+        change = (price - last_price) / last_price
+
+        if trend is None:
+
+            if abs(change) >= threshold:
+
+                if change > 0:
+                    trend = "up"
+                    lows.append(last_pivot)
+                else:
+                    trend = "down"
+                    highs.append(last_pivot)
+
+                last_pivot = i
+                last_price = price
+
+        elif trend == "up":
+
+            if price > last_price:
+
+                last_price = price
+                last_pivot = i
+
+            elif (last_price - price) / last_price >= threshold:
+
+                highs.append(last_pivot)
+
+                trend = "down"
+                last_price = price
+                last_pivot = i
+
+        elif trend == "down":
+
+            if price < last_price:
+
+                last_price = price
+                last_pivot = i
+
+            elif (price - last_price) / last_price >= threshold:
+
+                lows.append(last_pivot)
+
+                trend = "up"
+                last_price = price
+                last_pivot = i
+
+    return highs, lows
+
+
+# =========================
+# ПОДТВЕРЖДЕНИЕ 15m
+# =========================
+
+def confirm_15m(start_time, level, direction):
+
+    df = get_data("15m")
+
+    df = df[df.time > start_time].reset_index(drop=True)
+
+    if direction == "SHORT":
+
+        for i in range(len(df)):
+
+            if df.low.iloc[i] < level:
+                return df.time.iloc[i]
+
+    if direction == "LONG":
+
+        for i in range(len(df)):
+
+            if df.high.iloc[i] > level:
+                return df.time.iloc[i]
+
+    return None
+
+
+# =========================
+# ПОИСК СЕТАПОВ
+# =========================
+
+def detect_setups(df):
+
+    highs, lows = find_swings(df)
+
+    setups = []
+
+    # SHORT
+    for i in range(1, len(highs)):
+
+        h1 = highs[i-1]
+        h2 = highs[i]
+
+        if df.high.iloc[h2] < df.high.iloc[h1] and df.rsi.iloc[h1] > 70:
+
+            lows_between = [l for l in lows if h1 < l < h2]
+
+            if not lows_between:
+                continue
+
+            l1 = lows_between[-1]
+
+            level = df.low.iloc[l1]
+
+            entry = confirm_15m(df.time.iloc[h2], level, "SHORT")
+
+            if entry:
+
+                setups.append({
+                    "type": "SHORT",
+                    "entry": entry,
+                    "level": level
+                })
+
+    # LONG
+    for i in range(1, len(lows)):
+
+        l1 = lows[i-1]
+        l2 = lows[i]
+
+        if df.low.iloc[l2] > df.low.iloc[l1] and df.rsi.iloc[l1] < 30:
+
+            highs_between = [h for h in highs if l1 < h < l2]
+
+            if not highs_between:
+                continue
+
+            h1 = highs_between[-1]
+
+            level = df.high.iloc[h1]
+
+            entry = confirm_15m(df.time.iloc[l2], level, "LONG")
+
+            if entry:
+
+                setups.append({
+                    "type": "LONG",
+                    "entry": entry,
+                    "level": level
+                })
+
+    return setups
+
+
+# =========================
+# BACKTEST
+# =========================
+
+def backtest():
+
+    df = get_data("1h")
+
+    setups = detect_setups(df)
+
+    print()
+    print("Найдено сигналов:", len(setups))
+    print()
+
+    for s in setups:
+
+        print(
+            s["type"],
+            "| entry:", s["entry"],
+            "| level:", round(s["level"], 2)
+        )
+
+
+backtest()
