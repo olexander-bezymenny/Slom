@@ -16,7 +16,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # НАСТРОЙКИ
 # =========================
 
-BOT_TOKEN = '8698198268:AAFQyjs3vXMtBfuUpib0TQnpyBfrOh0HcBs'
+BOT_TOKEN = '8605521122:AAHuywxOWTc31YovOo2-JV2su6Cb5K7KgIw'
 
 USERS = [
     '489918981', '829614314'
